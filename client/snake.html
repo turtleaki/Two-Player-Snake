@@ -1,0 +1,436 @@
+﻿<!--The game logic code for snake was taken from:
+    http://thecodeplayer.com/walkthrough/html5-game-tutorial-make-a-snake-game-using-html5-canvas-jquery
+We modified the code so that it will fit our requirements.-->
+
+
+<!doctype html>
+<html>
+<head>
+    <meta charset='UTF-8' />
+    <style>
+        input, textarea {
+            border: 1px solid #CCC;
+            margin: 0px;
+            padding: 0px;
+        }
+        h1{
+            font-family: Courier New;
+            color: darkgrey;
+        }
+
+        #ip {
+            line-height: 20px;
+            width: 150px;
+        }
+
+        #port {
+            line-height: 20px;
+            width: 50px;
+        }
+
+        #player {
+            line-height: 20px;
+            width: 100px;
+        }
+
+        #body {
+            max-width: 800px;
+            margin: auto;
+        }
+
+        #log {
+            width: 100%;
+            height: 200px;
+        }
+
+        #message {
+            width: 100%;
+            line-height: 20px;
+        }
+    </style>
+    <h1>Snake~</h1>
+    <canvas id="canvas" width="500" height="350"></canvas>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js"></script>
+    <script src="fancywebsocket.js"></script>
+    <script>
+        var Server;
+
+        var canvas;
+        var ctx;
+        var w;
+        var h;
+        var p2_id = "Enemy";
+        var my_id;
+        var cw = 10;
+        var d1;
+        var food = [];
+        var score_text1 = "Score: 0";
+        var score_text2 = "Score: 0";
+        var snake_array1 = []; //an array of cells to make up the snake
+        var snake_array2 = [];
+        var timer = 29;
+        var date;
+        var timeStart;
+        var timeEnd;
+        var latency = 0;
+        var game_loop;
+        var delay = 60;
+
+
+
+        function log(text) {
+            $log = $('#log');
+            //Add text to log
+            $log.append(($log.val() ? "\n" : '') + text);
+            //Autoscroll
+            $log[0].scrollTop = $log[0].scrollHeight - $log[0].clientHeight;
+        }
+
+        function send(text) {
+            Server.send('message', text);
+        }
+
+        function connect() {
+            log('Connecting...');
+            Server = new FancyWebSocket('ws://' + document.getElementById('ip').value + ':' + document.getElementById('port').value);
+
+            $('#message').keypress(function (e) {
+                if (e.keyCode == 13 && this.value) {
+                    log('You: ' + this.value);
+                    send(this.value);
+
+                    $(this).val('');
+                }
+            });
+
+            //OH NOES! Disconnection occurred.
+            Server.bind('close', function (data) {
+                document.getElementById("cntBtn").disabled = false;
+                Server.disconnect();
+                //document.removeChild(document.getElementById("canvas"));
+
+                log("Disconnected.");
+            });
+
+            //Let the user know we're connected
+            Server.bind('open', function () {
+                document.getElementById("cntBtn").disabled = true;
+                log("Waiting.");
+
+            });
+
+            ///////////////
+
+            //Log any messages sent from server
+            Server.bind('score', function (payload) {
+                if (payload == "Welcome!") {
+                    initialize();
+                }
+                else if (payload == "Disconnected") {
+                    disconnect();
+                }
+                else {
+                    payload = payload.split(";");
+                }
+
+                //Starting snakes
+                if (payload[0] == "st") {
+                    snakeInitFunc(payload[1], payload[2], payload[3], payload[4]);
+                }
+
+                //Winner
+                else if (payload[0] == "winner") {
+                    log(payload[1]);
+                }
+
+                //Enemy's ID
+                else if (payload[0] == "id") {
+                    set_p2(payload[1]);
+                }
+
+                //Server's latency
+                else if (payload[0] == "latency") {
+                    latencyFunc(payload[1])
+                
+                }
+
+                //Send food and updated score
+                else if (payload[0] == "fs") {
+                    display(payload[1], payload[2]);
+                }
+
+                 //Send snake
+                else if (payload[0] == "sn") {
+                    set_snake_array2(stringToSnake(payload[1]));
+                }
+            });
+            Server.connect();
+        }
+
+        ///////////////
+
+        //Set player 2's ID
+        function set_p2(p2) {
+            p2_id = p2;
+        }
+
+        //Set player2's snake
+        function set_snake_array2(sa2) {
+            snake_array2 = sa2;
+        }
+
+
+
+        function initialize() {
+            Server.send('score', "id" + document.getElementById("player").value);
+            //$(document).ready(function () {
+            //Canvas stuff
+            canvas = $("#canvas")[0];
+            ctx = canvas.getContext("2d");
+            w = $("#canvas").width();
+            h = $("#canvas").height();
+            p2_id = "Enemy";
+            my_id = document.getElementById("player").value;
+            //Lets save the cell width in a variable for easy control
+            Server.send("score", "id" + my_id);
+
+            cw = 10;
+            food = [];
+            score_text1 = "Score: 0";
+            score_text2 = "Score: 0";
+            //Lets create the snake now
+            snake_array1 = []; //an array of cells to make up the snake
+            snake_array2 = [];
+            timer = 29;
+            latency = 0;
+        }
+
+
+
+
+        function init() {
+            d1 = "right";
+            if (typeof game_loop != "undefined") clearInterval(game_loop);
+            game_loop = setInterval(paint, 60);
+        }
+
+
+        //Load in the initial snakes, food, and score
+        function snakeInitFunc(payload1, payload2, payload3, payload4) {
+            d1 = "right";
+            snake_array1 = stringToSnake(payload1);
+            snake_array2 = stringToSnake(payload2);
+
+            scores = payload3.split(",");
+            score_text1 = my_id + ": " + scores[0];
+            score_text2 = p2_id + ": " + scores[1];
+
+            var foodstr = payload4.split(",");
+         
+            food.x = parseInt(foodstr[0]);
+            food.y = parseInt(foodstr[1]);
+            init();
+
+        }
+
+
+
+
+        function disconnect() {
+            game_loop = clearInterval(game_loop);
+            ctx.clearRect(0, 0, w, h);
+        }
+
+        //Turns the snake array into the right string format to send to server
+        function snakeToString(snake_arr) {
+            var ret_str = "";
+            for (var i = 0; i < snake_arr.length ; i++) {
+                ret_str += snake_arr[i].x + "," + snake_arr[i].y;
+                if (i != snake_arr.length - 1) {
+                    ret_str += "|";
+                }
+            }
+            return ret_str;
+        }
+
+        //Didn't end up using....
+        function create_snake(snake1, snake2) {
+            snake_array1 = stringToSnake(snake1);
+            snake_array2 = stringToSnake(snake2);
+        }
+
+
+
+        //Parses through the snake string that the server sends and turns it into a snake array
+        function stringToSnake(snake_str) {
+
+            var snake_arr = [];
+            snake_str = snake_str.split("|");
+
+            for (var i = 0; i < snake_str.length; i++) {
+                var temp_cell = snake_str[i].split(",");
+                snake_arr.push({ x: parseInt(temp_cell[0], 10), y: parseInt(temp_cell[1], 10) });
+            }
+            return snake_arr;
+        }
+
+        //Calculates the latency
+        function latencyFunc(payload1) {
+            timeEnd = new Date();
+            serverDelay = parseInt(payload1);
+            latency = ((timeEnd - timeStart) - serverDelay);
+        }
+
+        //Displays the scores
+        function display(payload1, payload2) {
+            var foodstr = payload1.split(",");
+            food.x = parseInt(foodstr[0]);
+            food.y = parseInt(foodstr[1]);
+
+            var temp_score = payload2.split(",");
+
+            score_text1 = my_id + ": " + temp_score[0];
+            score_text2 = p2_id + ": " + temp_score[1];
+        }
+
+
+        //Paint the snakes every 60ms
+        var time_start = new Date();
+        function paint() {
+            timer += 1;
+            if (timer % 30 == 0) {
+                timer = 1;
+                timeStart = new Date();
+                Server.send("score", "Latency");
+            }
+       
+            //To avoid the snake trail we need to paint the BG on every frame
+            //Lets paint the canvas now
+            var prev_nx1 = snake_array1[0].x;
+            var prev_ny1 = snake_array1[0].x;
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, w, h);
+            ctx.strokeStyle = "black";
+            ctx.strokeRect(0, 0, w, h);
+
+            //The movement code for the snake to come here.
+            //The logic is simple
+            //Pop out the tail cell and place it infront of the head cell
+            var current_Time = new Date();
+
+            //Delays the snake according the server latency
+            if (current_Time - time_start > latency / 4) {
+                var nx1 = snake_array1[0].x;
+                var ny1 = snake_array1[0].y;
+
+                if (d1 == "right") nx1++;
+                else if (d1 == "left") nx1--;
+                else if (d1 == "up") ny1--;
+                else if (d1 == "down") ny1++;
+
+                if (nx1 == -1 || nx1 == w / cw || ny1 == -1 || ny1 == h / cw || check_collision(nx1, ny1, snake_array1)) {
+                    //restart game
+                    Server.send('score', "GameOver");
+                    game_loop = clearInterval(game_loop);
+                    //Lets organize the code a bit now.
+                    return;
+                }
+
+                if (nx1 == food.x && ny1 == food.y) {
+                    var tail1 = { x: nx1, y: ny1 };
+                    Server.send("score", "Food");
+
+                }
+                else {
+                    var tail1 = snake_array1.pop(); //pops out the last cell
+                    tail1.x = nx1; tail1.y = ny1;
+                }
+               
+                snake_array1.unshift(tail1);
+
+                if (snake_array1[0].x != prev_nx1 || snake_array1[0].y != prev_ny1) {
+
+                    Server.send('score', "sn" + snakeToString(snake_array1));
+
+                }
+
+                time_start = new Date();
+            }
+            
+            paint_cell(food.x, food.y, "blue");
+
+            for (var i = 0; i < snake_array1.length; i++) {
+                var c = snake_array1[i];
+                paint_cell(c.x, c.y, "black");
+            }
+
+            for (var i = 0; i < snake_array2.length; i++) {
+                var c = snake_array2[i];
+                paint_cell(c.x, c.y, "red");
+            }
+
+
+            ctx.fillStyle = "black";
+            ctx.fillText(score_text1, 5, h - 5);
+
+
+            ctx.fillStyle = "red";
+            ctx.fillText(score_text2, 400, h - 5);
+
+            ctx.fillStyle = "blue";
+            ctx.fillText(latency, 400, 10)
+        }
+
+
+        //Lets first create a generic function to paint cells
+        function paint_cell(x, y, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x * cw, y * cw, cw, cw);
+            ctx.strokeStyle = "white";
+            ctx.strokeRect(x * cw, y * cw, cw, cw);
+        }
+
+        //Checks if the snake collides with itself
+        function check_collision(x, y, array) {
+            //This function will check if the provided x/y coordinates exist
+            //in an array of cells or not
+            for (var i = 0; i < array.length; i++) {
+                if (array[i].x == x && array[i].y == y)
+                    return true;
+            }
+            return false;
+        }
+
+
+
+        //Lets add the keyboard controls now
+        $(document).keydown(function (e) {
+            var key = e.which;
+            //We will add another clause to prevent reverse gear
+            if (key == "37" && d1 != "right") d1 = "left";
+            else if (key == "38" && d1 != "down") d1 = "up";
+            else if (key == "39" && d1 != "left") d1 = "right";
+            else if (key == "40" && d1 != "up") d1 = "down";
+            //The snake is now keyboard controllable
+
+        })
+
+
+
+
+
+
+    </script>
+</head>
+<body>
+    <div id='body'>
+        Server ip: <input type='text' id='ip' name='ip'>
+        Server port: <input type='text' id='port' name='port'>
+        Player: <input type='text' id='player' name='player'>
+
+        <button type="button" id='cntBtn' onclick="connect();">Connect</button>
+        <textarea id='log' name='log' readonly='readonly'></textarea><br />
+        <input type='text' id='message' name='message' />
+    </div>
+</body>
+</html>
